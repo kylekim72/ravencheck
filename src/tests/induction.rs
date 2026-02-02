@@ -54,6 +54,13 @@ mod induction {
         add(x,Nat::S(y)) == Nat::S(add(x,y))
     }
 
+    // This makes use of the previous #[annotate] property, which has
+    // now been assumed.
+    #[verify]
+    fn check_factor_s_right(x: Nat, y: Nat) -> bool {
+        add(x,Nat::S(y)) == Nat::S(add(x,y))
+    }
+
     #[annotate]
     #[inductive(x: Nat, y: Nat)]
     #[should_fail]
@@ -79,5 +86,47 @@ mod induction {
         forall(|y: Nat, z: Nat| {
             add(y,y) == add(z,z)
         })
+    }
+}
+
+#[crate::check_module(crate)]
+#[allow(dead_code)]
+#[declare_types(u32)]
+mod polymorphic_annotate {
+    #[define]
+    enum List<T> {
+        Nil,
+        Cons(T, Box<List<T>>),
+    }
+
+    #[verify]
+    fn nil_is_nil<T>() -> bool {
+        List::<T>::Nil == List::<T>::Nil
+    }
+
+    #[annotate]
+    #[inductive(l: List<T>)]
+    #[for_type(List<E> => <E>)]
+    fn cons_ne_base<T>(t: T) -> bool {
+        List::<T>::Cons(t, l) != l
+    }
+}
+
+#[crate::check_module(crate)]
+#[allow(dead_code)]
+#[declare_types(u32)]
+#[rvn_should_panic("only enum types should be used in #[inductive(..)], but you used u32 for property cons_ne_base")]
+mod induct_non_enum {
+    #[define]
+    enum List<T> {
+        Nil,
+        Cons(T, Box<List<T>>),
+    }
+
+    #[annotate]
+    #[inductive(l: List<T>, x: u32)]
+    #[for_type(List<E> => <E>)]
+    fn cons_ne_base<T>(t: T) -> bool {
+        List::<T>::Cons(t, l) != l
     }
 }

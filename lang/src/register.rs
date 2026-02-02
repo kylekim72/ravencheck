@@ -133,12 +133,13 @@ impl Sig {
 
         // Create a forall-quantified formula, which quantifies the fn
         // item's arguments.
-        let (_ident, tas, formula) = i.into_uni_formula().unwrap();
+        let mut igen = IGen::new();
+        let (_ident, tas, formula) = i.into_uni_formula(&mut igen).unwrap();
 
         let axiom = Axiom {
             tas,
             inst_mode: InstMode::Rules(inst_rules.clone()),
-            body: formula.build_with(&mut IGen::new()),
+            body: formula.build_with(&mut igen),
         };
         // println!("Pushing axiom with rules {:?}", inst_rules);
         self.axioms.push(axiom);

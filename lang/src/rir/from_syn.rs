@@ -831,10 +831,16 @@ pub struct RirFn {
 impl RirFn {
     /// Return a `Builder` that uses the fn item's arguments
     /// as the signature of a universal quantifier.
+    ///
+    /// Advance the given `IGen` using the body.
     pub fn into_uni_formula(
-        self
+        self,
+        igen: &mut IGen,
     ) -> Result<(String, Vec<String>, Builder), String> {
         let Self{sig, body} = self;
+
+        body.advance_igen(igen);
+
         // The output type is expected to be bool, but we don't
         // check/enforce that here.
         let RirFnSig{ident, tas, inputs, ..} = sig;

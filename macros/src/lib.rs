@@ -155,16 +155,12 @@ impl RvnItemAttr {
             ForCall(..) | ForInst(..) | ForValues(..) => format!("{} should only be used under {} on a 'fn' item", rt, AnnotateMulti.refer_text()),
             Import => format!("{} should only be used as the first ravencheck attribute on a 'use' item", rt),
             Inductive(..) => format!("{} should only be used under {} on a 'fn' item", rt, AnnotateGeneral.refer_text()),
-            InstRule(..) => format!("{} should only be used under {} on a 'fn' item", rt, Assume.refer_text()),
+            InstRule(..) => format!("{} should only be used under {} or {} on a 'fn' item with type parameters", rt, Assume.refer_text(), AnnotateGeneral.refer_text()),
             Phantom => format!("{} should only be used under {} or {}, on a 'fn', 'type', 'struct', or 'enum' item.", rt, Declare.refer_text(), Define.refer_text()),
             Recursive => format!("{} should only be used under {} on a 'fn' item.", rt, Define.refer_text()),
             ShouldFail => format!("{} should only be used under {} on a 'fn' item.", rt, AnnotateMulti.refer_text()),
             Total => format!("{}, should only be used under {} or under both {} and {} on a 'fn' item.", rt, Declare.refer_text(), Define.refer_text(), Recursive.refer_text()),
         }
-    }
-
-    fn under_inductive(attrs: &Vec<Self>) -> bool {
-        attrs.iter().any(|a| match a { Self::Inductive(..) => true, _ => false })
     }
 
     fn under_annotate_multi(attrs: &Vec<Self>) -> bool {
@@ -313,8 +309,8 @@ impl RvnItemAttr {
             // Import
             (Import, Tag::Use) => (),
 
-            // Secondary attributes that go under 'assume'.
-            (InstRule(..), _) if Self::under_assume(rvn_attrs) => (),
+            // Secondary attributes that go under 'assume' or 'annotate'.
+            (InstRule(..), _) if Self::under_assume(rvn_attrs) || Self::under_annotate_general(rvn_attrs) => (),
 
             // Phantom: under 'define' or 'declare'
             (Phantom, _) if Self::under_define(rvn_attrs) || Self::under_declare(rvn_attrs) => (),
@@ -396,7 +392,9 @@ enum RccCommand {
     /// totality axiom (which only makes sense if it's recursive).
     Define(Item, bool, bool, bool),
     Import(ItemUse),
-    Inductive(bool, Vec<String>, ItemFn),
+    /// First bool is `should_fail`, then inductive quantifier lines,
+    /// then inst rule lines.
+    Inductive(bool, Vec<String>, Vec<String>, ItemFn),
     /// The boolean is `true` if this should be verified, and `false`
     /// if this should be falsified.
     Goal(bool, ItemFn),
@@ -615,16 +613,18 @@ impl RccCommand {
                 Item::Fn(i) => {
                     let mut qsigs = Vec::new();
                     let mut should_fail = false;
+                    let mut rules = Vec::new();
                     for a in ras { match a {
                         Inductive(qs) => qsigs.push(qs),
-                        RvnItemAttr::ShouldFail => { should_fail = true; },
+                        InstRule(r) => { rules.push(r); },
+                        ShouldFail => { should_fail = true; },
                         a => panic!(
                             "Unexpected {:?} on '{}'",
                             a,
                             i.sig.ident
                         ),
                     }}
-                    let c = RccCommand::Inductive(should_fail, qsigs, i);
+                    let c = RccCommand::Inductive(should_fail, qsigs, rules, i);
                     Ok((vec![c], None))
                 }
                 item => Err(SynError::new(item.span(), "The #[inductive(..)] attribute should only be used on fn items.")),
@@ -958,12 +958,13 @@ fn generate_stmts(commands: &Vec<RccCommand>, mode: GenMode) -> Vec<Stmt> {
                 }).unwrap();
                 out.push(s);
             }
-            RccCommand::Inductive(should_fail, value_strs, item_fn) => {
+            RccCommand::Inductive(should_fail, value_strs, rule_strs, item_fn) => {
                 let item_str = quote!{ #item_fn }.to_string();
                 let s: Stmt = syn::parse2(quote! {
                     rcc.reg_fn_inductive(
                         #should_fail,
                         [#(#value_strs),*],
+                        [#(#rule_strs),*],
                         #item_str
                     ).unwrap();
                 }).unwrap();

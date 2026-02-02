@@ -17,6 +17,7 @@ use ravenlang::{
     CheckedSig,
     IGen,
     Ident as RirIdent,
+    InstRule,
     Goal,
     HypotheticalCallSyntax,
     HypotheticalCall,
@@ -29,6 +30,7 @@ use ravenlang::{
     SolverConfig,
     InstRuleSyntax,
     TypeContext,
+    TypeDef,
     VType,
     Val,
     syn_to_builder,
@@ -453,12 +455,19 @@ impl Rcc {
         Ok(())
     }
 
-    pub fn reg_fn_inductive<const N1: usize>(
+    pub fn reg_fn_inductive<const N1: usize, const N2: usize>(
         &mut self,
         should_fail: bool,
         value_lines: [&str; N1],
+        inst_rules: [&str; N2],
         item_fn: &str,
     ) -> Result<(), String> {
+
+        // Parse the inst rules
+        let inst_rules = inst_rules.into_iter()
+            .map(|s| InstRule::from_syn(syn::parse_str(s).unwrap()))
+            .collect::<Result<Vec<_>, _>>()?;
+
         // Parse syn values from strs
         let item_fn: ItemFn = syn::parse_str(item_fn).unwrap();
         let qsigs: Vec<Punctuated<PatType, Token![,]>> = value_lines
@@ -480,7 +489,19 @@ impl Rcc {
 
         // Parse the signature into Rir types, and keep the body.
         let i = RirFn::from_syn(item_fn)?;
-        let prop_ident = i.sig.ident.clone();
+        // Expand type aliases.
+        let i = i.expand_types(&self.sig.0.type_aliases());
+        let mut igen = IGen::new();
+        // Break the parsed fn out into parts.
+        let (prop_ident, tas, prop_body) =
+            i.into_uni_formula(&mut igen).unwrap();
+        let prop_body = prop_body.build_with(&mut igen);
+
+        if tas.len() != 0 && inst_rules.len() == 0 {
+            panic!("#[annotate] item '{}' is polymorphic, but has no instantiation rules.  This means that the item, even if verified, will never actually be assumed when verifying other properties.  You need to add a rule to instantiate the item's type parameters when a type of a particular form is relevant.  For example, adding the attribute #[for_type(HashMap<T1,T2> => <T1,T2>)] will plug in T1 and T2 as the item's type parameters when the type HashMap<T1,T2> is used in a query.", prop_ident);
+        }
+
+        // let prop_ident = i.sig.ident.clone();
         let mut qsig = Vec::new();
         let mut qbases = Vec::new();
         for punct in qsigs {
@@ -490,22 +511,19 @@ impl Rcc {
                 let x = p.unwrap_vname()?;
                 let t = t.expand_types(&self.sig.0.type_aliases());
                 qsig.push((x, t.clone()));
-                match t.unwrap_base() {
-                    Ok(b) => qbases.push(b),
-                    Err(t) => return Err(format!("{}: only base types should be used in #[for_values(..)], but found {}", prop_ident, t.render())),
+                match t.clone().unwrap_base() {
+                    Ok(ref b @ BType::UI(ref t_ident, _)) => {
+                        match self.sig.0.type_defs.get(t_ident) {
+                            Some((_, TypeDef::Enum(..))) => {},
+                            _ => return Err(format!("{}: only enum types should be used in #[inductive(..)], but you used {} for property {}", prop_ident, t.render(), &prop_ident)),
+                        }
+                        qbases.push(b.clone());
+                    }
+                    Ok(BType::Prop) => return Err(format!("{}: only enum types should be used in #[inductive(..)], but you used {} for property {}", prop_ident, t.render(), &prop_ident)),
+                    Err(t) => return Err(format!("{}: only enum types should be used in #[inductive(..)], but you used {} for property {}", prop_ident, t.render(), &prop_ident)),
                 }
             }
         }
-        // Apply type aliases
-        let i = i.expand_types(&self.sig.0.type_aliases());
-
-        // Build the axiom.
-
-        // Forall-quantify all input values.
-
-        // The fn item body goes on bottom.
-
-        // let _ = ... lines within the body get erased.
 
         // Create a snapshot of the sig which does not assume the
         // property under verification.  This sig marks the quantified
@@ -518,8 +536,7 @@ impl Rcc {
         let mut vc_sig = self.sig.clone();
         vc_sig.0.inductive_bases = Some(qbases_set);
 
-        let mut igen = i.body.get_igen();
-        let axiom_body = i.body.clone()
+        let axiom_body = prop_body.clone()
             .erase_wildcard_lets()
             .builder();
         let axiom = axiom_body
@@ -531,7 +548,7 @@ impl Rcc {
             &CType::Return(VType::prop()),
             TypeContext::new_types(
                 self.sig.0.clone(),
-                Vec::new(),
+                tas.clone(),
             )
         ).expect(&format!(
             "type error in generated vc for '{}'",
@@ -604,7 +621,7 @@ impl Rcc {
         if !should_fail {
             self.sig.0.axioms.push(Axiom {
                 tas: Vec::new(),
-                inst_mode: InstMode::Rules(Vec::new()),
+                inst_mode: InstMode::Rules(inst_rules),
                 body: axiom,
             });
         }
@@ -616,7 +633,7 @@ impl Rcc {
         // Sequence the body that each call refers to, to the given
         // output variable.
 
-        let vc = inhyp.implies(i.body.unroll_rec(&self.defs).builder())
+        let vc = inhyp.implies(prop_body.unroll_rec(&self.defs).builder())
             .into_quantifier(Quantifier::Forall, qsig)
             .build_with(&mut igen);
 
@@ -625,7 +642,7 @@ impl Rcc {
             &CType::Return(VType::prop()),
             TypeContext::new_types(
                 vc_sig.0.clone(),
-                Vec::new(),
+                tas.clone(),
             )
         ).expect("vc type error");
 
@@ -635,7 +652,7 @@ impl Rcc {
         self.push_goal_ctx(
             Goal {
                 title: prop_ident.clone(),
-                tas: Vec::new(),
+                tas,
                 condition: vc,
                 should_be_valid: !should_fail,
             },
@@ -780,12 +797,13 @@ impl Rcc {
 
         // Create a forall-quantified formula, which quantifies the fn
         // item's arguments.
-        let (ident, tas, formula) = i.into_uni_formula().unwrap();
+        let mut igen = IGen::new();
+        let (ident, tas, formula) = i.into_uni_formula(&mut igen).unwrap();
 
         let goal = Goal {
             title: ident,
             tas,
-            condition: formula.build_with(&mut IGen::new()),
+            condition: formula.build_with(&mut igen),
             should_be_valid,
             
         };
