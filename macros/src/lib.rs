@@ -77,6 +77,7 @@ impl SynItemTag {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RvnItemAttr {
+    AnnotateGeneral,
     Annotate(String),
     AnnotateMulti,
     Assume,
@@ -91,6 +92,7 @@ enum RvnItemAttr {
     // Should only be used with AnnotateMulti
     ForValues(String),
     Import,
+    Inductive(String),
     InstRule(String),
     // (State type, init, cond, step, finish)
     Loopify(Ident, Ident, Ident, Ident, Ident, Ident),
@@ -112,7 +114,7 @@ fn path_to_one_str(p: &Path) -> Option<String> {
 
 impl RvnItemAttr {
     fn is_primary(&self) -> bool { use RvnItemAttr::*; match self {
-        Annotate(..) | AnnotateMulti | Assume | AssumeFor(..)
+        AnnotateGeneral | Annotate(..) | AnnotateMulti | Assume | AssumeFor(..)
             | Declare | Define | Falsify | Import | Loopify(..)
             | Verify => true,
         _ => false,
@@ -121,6 +123,7 @@ impl RvnItemAttr {
     fn refer_text(&self) -> &'static str {
         use RvnItemAttr::*;
         match self {
+            AnnotateGeneral => "#[annotate]",
             Annotate(..) => "#[annotate(..)]",
             AnnotateMulti => "#[annotate_multi]",
             Assume => "#[assume]",
@@ -132,6 +135,7 @@ impl RvnItemAttr {
             ForInst(..) => "#[for_inst(..)]",
             ForValues(..) => "#[for_values(..)]",
             Import => "#[import]",
+            Inductive(..) => "#[inductive(..)]",
             InstRule(..) => "#[for_type(..)]",
             Loopify(..) => "#[loopify(..)]",
             Phantom => "#[phantom]",
@@ -146,10 +150,11 @@ impl RvnItemAttr {
         use RvnItemAttr::*;
         let rt = self.refer_text();
         match self {
-            Annotate(..) | AnnotateMulti | Assume | AssumeFor(..) | Falsify | Loopify(..) | Verify => format!("{} should only be used as the first ravencheck attribute on a 'fn' item", rt),
+            AnnotateGeneral | Annotate(..) | AnnotateMulti | Assume | AssumeFor(..) | Falsify | Loopify(..) | Verify => format!("{} should only be used as the first ravencheck attribute on a 'fn' item", rt),
             Declare | Define => format!("{} should only be used as the first ravencheck attribute on a 'fn', 'type', 'struct', or 'enum' item.", rt),
             ForCall(..) | ForInst(..) | ForValues(..) => format!("{} should only be used under {} on a 'fn' item", rt, AnnotateMulti.refer_text()),
             Import => format!("{} should only be used as the first ravencheck attribute on a 'use' item", rt),
+            Inductive(..) => format!("{} should only be used under {} on a 'fn' item", rt, AnnotateGeneral.refer_text()),
             InstRule(..) => format!("{} should only be used under {} on a 'fn' item", rt, Assume.refer_text()),
             Phantom => format!("{} should only be used under {} or {}, on a 'fn', 'type', 'struct', or 'enum' item.", rt, Declare.refer_text(), Define.refer_text()),
             Recursive => format!("{} should only be used under {} on a 'fn' item.", rt, Define.refer_text()),
@@ -158,8 +163,16 @@ impl RvnItemAttr {
         }
     }
 
+    fn under_inductive(attrs: &Vec<Self>) -> bool {
+        attrs.iter().any(|a| match a { Self::Inductive(..) => true, _ => false })
+    }
+
     fn under_annotate_multi(attrs: &Vec<Self>) -> bool {
         attrs.iter().any(|a| match a { Self::AnnotateMulti => true, _ => false })
+    }
+
+    fn under_annotate_general(attrs: &Vec<Self>) -> bool {
+        attrs.iter().any(|a| *a == Self::AnnotateGeneral)
     }
 
     fn under_assume(attrs: &Vec<Self>) -> bool {
@@ -198,7 +211,7 @@ impl RvnItemAttr {
         let attr = match &attr.meta {
             Meta::Path(p) if p.segments.len() == 1 => {
                 match path_to_one_str(p).as_deref() {
-                    Some("annotate") => error("This attribute needs arguments, for example: #[annotate(foo(a,b) => c)]")?,
+                    Some("annotate") => AnnotateGeneral,
                     Some("annotate_multi") => AnnotateMulti,
                     Some("assume") => Assume,
                     Some("declare") => Declare,
@@ -229,6 +242,7 @@ impl RvnItemAttr {
                     Some("for_type") => InstRule(l.tokens.to_string()),
                     Some("for_values") => ForValues(l.tokens.to_string()),
                     Some("import") => error("#[import] should not have arguments.")?,
+                    Some("inductive") => Inductive(l.tokens.to_string()),
                     Some("loopify") => {
                         let parser =
                             Punctuated
@@ -287,10 +301,14 @@ impl RvnItemAttr {
             (Define, Tag::Enum | Tag::Fn | Tag::Struct | Tag::Type) => (),
 
             // Primary attributes that go on 'fn' items.
-            (Annotate(..) | AnnotateMulti | Assume | AssumeFor(..) | Falsify | Loopify(..) | Verify, Tag::Fn) => (),
+            (Annotate(..) | AnnotateGeneral | AnnotateMulti | Assume | AssumeFor(..) | Falsify | Loopify(..) | Verify, Tag::Fn) => (),
+
+            (ShouldFail, Tag::Fn) if Self::under_annotate_general(rvn_attrs) => (),
 
             // Secondary attributes that go under 'annotate_multi'.
             (ForCall(..) | ForInst(..) | ForValues(..) | ShouldFail, Tag::Fn) if Self::under_annotate_multi(rvn_attrs) => (),
+
+            (Inductive(..), Tag::Fn) if Self::under_annotate_general(rvn_attrs) => (),
 
             // Import
             (Import, Tag::Use) => (),
@@ -378,6 +396,7 @@ enum RccCommand {
     /// totality axiom (which only makes sense if it's recursive).
     Define(Item, bool, bool, bool),
     Import(ItemUse),
+    Inductive(bool, Vec<String>, ItemFn),
     /// The boolean is `true` if this should be verified, and `false`
     /// if this should be falsified.
     Goal(bool, ItemFn),
@@ -591,6 +610,24 @@ impl RccCommand {
                     Ok((vec![c], None))
                 }
                 item => Err(SynError::new(item.span(), "The #[annotate_multi(..)] attribute should only be used on fn items.")),
+            }
+            AnnotateGeneral => match item {
+                Item::Fn(i) => {
+                    let mut qsigs = Vec::new();
+                    let mut should_fail = false;
+                    for a in ras { match a {
+                        Inductive(qs) => qsigs.push(qs),
+                        RvnItemAttr::ShouldFail => { should_fail = true; },
+                        a => panic!(
+                            "Unexpected {:?} on '{}'",
+                            a,
+                            i.sig.ident
+                        ),
+                    }}
+                    let c = RccCommand::Inductive(should_fail, qsigs, i);
+                    Ok((vec![c], None))
+                }
+                item => Err(SynError::new(item.span(), "The #[inductive(..)] attribute should only be used on fn items.")),
             }
             Assume => match item {
                 Item::Fn(i) => {
@@ -920,6 +957,17 @@ fn generate_stmts(commands: &Vec<RccCommand>, mode: GenMode) -> Vec<Stmt> {
                     ).unwrap();
                 }).unwrap();
                 out.push(s);
+            }
+            RccCommand::Inductive(should_fail, value_strs, item_fn) => {
+                let item_str = quote!{ #item_fn }.to_string();
+                let s: Stmt = syn::parse2(quote! {
+                    rcc.reg_fn_inductive(
+                        #should_fail,
+                        [#(#value_strs),*],
+                        #item_str
+                    ).unwrap();
+                }).unwrap();
+                out.push(s)
             }
             RccCommand::Assume(rules, item_fn) => {
                 let item_str = quote!{ #item_fn }.to_string();

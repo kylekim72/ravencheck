@@ -59,6 +59,8 @@ mod utility;
 pub use rir::ident::Ident;
 pub use rir::igen::IGen;
 mod tag_recursive;
+mod unroll_rec;
+mod erase_wildcard_lets;
 
 pub use rir::from_syn::{
     InstRuleSyntax,

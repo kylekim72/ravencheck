@@ -1,9 +1,44 @@
 #[crate::check_module(crate)]
 #[allow(dead_code)]
 mod induction {
+    #[annotate]
+    fn true_is_true() -> bool {
+        true == true
+    }
+
+    #[annotate]
+    #[should_fail]
+    fn true_is_false() -> bool {
+        true == false
+    }
+
     #[define]
     enum Nat { Z, S(Box<Nat>) }
 
+    #[annotate]
+    fn z_is_z() -> bool {
+        Nat::Z == Nat::Z
+    }
+
+    #[annotate]
+    #[should_fail]
+    fn z_is_s() -> bool {
+        Nat::Z == Nat::S(Nat::Z)
+    }
+
+    #[annotate]
+    #[inductive(x: Nat)]
+    fn z_is_zi() -> bool {
+        Nat::Z == Nat::Z
+    }
+
+    #[annotate]
+    #[inductive(x: Nat)]
+    #[should_fail]
+    fn z_is_si() -> bool {
+        Nat::Z == Nat::S(x)
+    }
+    
     #[define]
     #[recursive]
     fn add(x: Nat, y: Nat) -> Nat {
@@ -13,43 +48,31 @@ mod induction {
         }
     }
 
-    #[annotate_multi]
-    #[for_values(x: Nat, y: Nat, sy: Nat)]
-    #[for_call(add(x,y) => xy)]
-    #[for_call(add(x,sy) => xsy)]
+    #[annotate]
+    #[inductive(x: Nat, y: Nat)]
     fn factor_s_right_good() -> Bool {
-        implies(
-            sy == Nat::S(y),
-            Nat::S(xy) == xsy
-        )
+        add(x,Nat::S(y)) == Nat::S(add(x,y))
     }
 
-    #[annotate_multi]
+    #[annotate]
+    #[inductive(x: Nat, y: Nat)]
     #[should_fail]
-    #[for_values(x: Nat, y: Nat, sy: Nat)]
-    #[for_call(add(x,y) => xy)]
-    #[for_call(add(x,sy) => xsy)]
     fn factor_s_right_oops() -> Bool {
-        implies(
-            sy == Nat::S(y),
-            // This line uses != in place of ==
-            Nat::S(xy) != xsy
-        )
+        // This line uses != in place of ==
+        add(x,Nat::S(y)) != Nat::S(add(x,y))
     }
 
-    #[annotate_multi]
+    #[annotate]
+    #[inductive(x: Nat, y: Nat, z: Nat)]
     #[should_fail]
-    #[for_values(x: Nat, y: Nat, z: Nat)]
-    #[for_call(add(x,x) => xx)]
     fn prop_0() -> bool {
         // Should obviously fail.
         add(y,y) == add(z,z)
     }
 
-    #[annotate_multi]
+    #[annotate]
+    #[inductive(x: Nat)]
     #[should_fail]
-    #[for_values(x: Nat)]
-    #[for_call(add(x,x) => xx)]
     fn prop_1() -> bool {
         // Here is a second version that should fail, which quantifies
         // y and z in a different way.
