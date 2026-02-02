@@ -160,6 +160,7 @@ mod induct_instantiations {
 
     #[annotate]
     #[inductive(n: Nat)]
+    #[should_fail]
     fn prop1() -> bool {
         let _ = outside_1(n);
 

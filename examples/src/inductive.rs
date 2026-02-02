@@ -30,3 +30,25 @@ mod small_inductive {
         add(a, Nat::Z) == a
     }
 }
+
+#[ravencheck::check_module]
+#[allow(dead_code)]
+mod polymorphic_annotate {
+    #[define]
+    enum List<T> {
+        Nil,
+        Cons(T, Box<List<T>>),
+    }
+
+    #[verify]
+    fn nil_is_nil<T>() -> bool {
+        List::<T>::Nil == List::<T>::Nil
+    }
+
+    #[annotate]
+    #[inductive(l: List<T>)]
+    #[for_type(List<E> => <E>)]
+    fn cons_ne_base<T>(t: T) -> bool {
+        List::<T>::Cons(t, l) != l
+    }
+}
