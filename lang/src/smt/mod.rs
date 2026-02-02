@@ -509,6 +509,9 @@ fn query_negative_c(
             println!("Query is undecidable due to sort cycles.");
             return RvnResponse::SortCycles(cycles,name)
         }
+        println!("--------------------------");
+        println!("Checking case: {}", name);
+        println!("--------------------------");
         match internal::check_sat_of_normal(&case, sig.inner_sig(), solver_config).unwrap() {
             Response::Sat => {
                 println!("Got SAT for case [{}]", &name);

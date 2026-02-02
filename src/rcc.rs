@@ -537,9 +537,9 @@ impl Rcc {
         vc_sig.0.inductive_bases = Some(qbases_set);
 
         let axiom_body = prop_body.clone()
-            .erase_wildcard_lets()
-            .builder();
-        let axiom = axiom_body
+            .erase_wildcard_lets();
+        let axiom_body_clone = axiom_body.clone();
+        let axiom = axiom_body.builder()
             .into_quantifier(Quantifier::Forall, qsig.clone())
             .build_with(&mut igen);
 
@@ -557,7 +557,6 @@ impl Rcc {
 
         let top_xs: Vec<RirIdent> =
             qsig.iter().map(|(x,_)| x.clone()).collect();
-        let axiom_clone = axiom.clone();
         let inhyp = Builder::with_x_many(qbases.len(), |hyp_xs| {
             let rs: Vec<((BType, RirIdent), RirIdent)> = qbases.into_iter()
                 .zip(hyp_xs)
@@ -584,7 +583,7 @@ impl Rcc {
             // Create the inductive hypothesis body by subbing the
             // hypothetical substructure variables into the axiom
             // body.
-            let inhyp_body = axiom_clone.substitute_many(
+            let inhyp_body = axiom_body_clone.substitute_many(
                 &rs.iter()
                     .map(|((_,hx),tx)| (tx.clone(), hx.clone().val()))
                     .collect()
@@ -633,7 +632,7 @@ impl Rcc {
         // Sequence the body that each call refers to, to the given
         // output variable.
 
-        let vc = inhyp.implies(prop_body.unroll_rec(&self.defs).builder())
+        let vc = inhyp.implies(prop_body.unroll_rec(&self.defs, &mut igen).builder())
             .into_quantifier(Quantifier::Forall, qsig)
             .build_with(&mut igen);
 
