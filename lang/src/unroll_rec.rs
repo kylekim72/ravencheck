@@ -3,10 +3,19 @@ use crate::{
     BinderN,
     Comp,
     Ident,
+    Pattern,
     Val,
 };
 
 use std::collections::HashMap;
+
+fn try_vec_1<T>(mut v: Vec<T>) -> Result<T, Vec<T>> {
+    if v.len() == 1 {
+        Ok(v.pop().unwrap())
+    } else {
+        Err(v)
+    }
+}
 
 impl Binder1 {
     pub fn unroll_rec(self, defs: &HashMap<String, Comp>) -> Self { match self {
@@ -44,7 +53,14 @@ impl Comp {
     pub fn unroll_rec(self, defs: &HashMap<String, Comp>) -> Self { match self {
         Self::Apply(m, ts, vs) => Self::Apply(Box::new(m.unroll_rec(defs)), ts, vs),
         Self::Bind1(b, x, m) => Self::Bind1(b.unroll_rec(defs), x, Box::new(m.unroll_rec(defs))),
-        Self::BindN(b, ps, m2) => Self::BindN(b.unroll_rec(defs), ps, Box::new(m2.unroll_rec(defs))),
+        Self::BindN(b, ps, m2) => match try_vec_1(ps) {
+            // For a "let _ = ..", we don't actually want to unroll
+            // the right side of the let, since this is being used as
+            // an instantiation.
+            Ok(Pattern::NoBind) => Self::BindN(b, vec![Pattern::NoBind], Box::new(m2.unroll_rec(defs))),
+            Ok(p) => Self::BindN(b.unroll_rec(defs), vec![p], Box::new(m2.unroll_rec(defs))),
+            Err(ps) => Self::BindN(b.unroll_rec(defs), ps, Box::new(m2.unroll_rec(defs))),
+        }
         Self::Force(v) => Self::Force(v.unroll_rec(defs)),
         Self::Fun(xs, m) => {
             let m = Box::new(m.unroll_rec(defs));

@@ -130,3 +130,39 @@ mod induct_non_enum {
         List::<T>::Cons(t, l) != l
     }
 }
+
+#[crate::check_module(crate)]
+mod induct_instantiations {
+    #[define]
+    enum Nat { Z, S(Box<Nat>) }
+
+    #[declare]
+    fn inside_1(n: Nat) -> Nat {
+        n
+    }
+
+    #[declare]
+    fn inside_2(n: Nat) -> Nat {
+        n
+    }
+
+    #[define]
+    #[recursive]
+    fn outside_1(n: Nat) -> Nat {
+        inside_1(n)
+    }
+
+    #[define]
+    #[recursive]
+    fn outside_2(n: Nat) -> Nat {
+        inside_2(n)
+    }
+
+    #[annotate]
+    #[inductive(n: Nat)]
+    fn prop1() -> bool {
+        let _ = outside_1(n);
+
+        outside_2(n) == n
+    }
+}
